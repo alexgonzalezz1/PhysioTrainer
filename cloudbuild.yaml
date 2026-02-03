@@ -1,0 +1,64 @@
+steps:
+  # Build API image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/physiotrainer/physiotrainer-api:$COMMIT_SHA'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/physiotrainer/physiotrainer-api:latest'
+      - '.'
+
+  # Push to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/physiotrainer/physiotrainer-api:$COMMIT_SHA'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/physiotrainer/physiotrainer-api:latest'
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'physiotrainer-api'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/physiotrainer/physiotrainer-api:$COMMIT_SHA'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--add-cloudsql-instances'
+      - '${_DB_CONNECTION}'
+      - '--set-env-vars'
+      - 'GCP_PROJECT_ID=$PROJECT_ID,GCP_LOCATION=${_REGION}'
+      - '--set-secrets'
+      - 'DATABASE_URL=physiotrainer-db-url:latest'
+      - '--memory'
+      - '512Mi'
+      - '--cpu'
+      - '1'
+      - '--min-instances'
+      - '0'
+      - '--max-instances'
+      - '10'
+
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/physiotrainer/physiotrainer-api:$COMMIT_SHA'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/physiotrainer/physiotrainer-api:latest'
+
+substitutions:
+  _REGION: us-central1
+  _DB_CONNECTION: ''  # Set via: --substitutions=_DB_CONNECTION=project:region:instance
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  dynamic_substitutions: true
+
+timeout: '1200s'

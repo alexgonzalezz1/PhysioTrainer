@@ -1,0 +1,70 @@
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: physiotrainer-db
+    environment:
+      POSTGRES_USER: physiotrainer
+      POSTGRES_PASSWORD: physiotrainer_secret
+      POSTGRES_DB: physiotrainer
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U physiotrainer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Backend
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: physiotrainer-api
+    environment:
+      DATABASE_URL: postgresql+asyncpg://physiotrainer:physiotrainer_secret@db:5432/physiotrainer
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID}
+      GCP_LOCATION: ${GCP_LOCATION:-us-central1}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/service-account.json
+      DEBUG: "false"
+    volumes:
+      - ./credentials:/app/credentials:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Streamlit Frontend (Simple)
+  frontend-streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: physiotrainer-streamlit
+    environment:
+      API_BASE_URL: http://api:8000/api/v1
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # React/Next.js Frontend (Full)
+  frontend-react:
+    build:
+      context: ./frontend-react
+      dockerfile: Dockerfile
+    container_name: physiotrainer-react
+    environment:
+      API_BASE_URL: http://api:8000/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
