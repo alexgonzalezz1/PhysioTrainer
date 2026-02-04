@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query, HTTPException, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 from typing import List
@@ -34,8 +34,8 @@ async def get_tendencias(
 
 @router.get("/mensual/{year}/{month}", response_model=InformeMensual)
 async def get_monthly_report(
-    year: int,
-    month: int = Query(ge=1, le=12),
+    year: int = Path(...),
+    month: int = Path(..., ge=1, le=12),
     session: AsyncSession = Depends(get_session),
     gemini: GeminiService = Depends(get_gemini_service)
 ):
