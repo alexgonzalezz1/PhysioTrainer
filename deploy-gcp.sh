@@ -214,8 +214,9 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     
     # Construir con la URL de la API
     cd frontend-react
-    gcloud builds submit --tag $FRONTEND_IMAGE_URL \
-        --substitutions="_API_URL=$API_URL/api/v1"
+    # Nota: Eliminamos --substitutions porque al construir desde Dockerfile directo no se usa cloudbuild.yaml
+    # y las variables de entorno se inyectan en el despliegue (runtime).
+    gcloud builds submit --tag $FRONTEND_IMAGE_URL
     cd ..
     
     # Desplegar frontend
