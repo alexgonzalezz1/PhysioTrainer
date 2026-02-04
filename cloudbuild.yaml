@@ -55,7 +55,8 @@ images:
 
 substitutions:
   _REGION: us-central1
-  _DB_CONNECTION: ''  # Set via: --substitutions=_DB_CONNECTION=project:region:instance
+  _DB_CONNECTION: ""  # Set via: --substitutions=_DB_CONNECTION=project:region:instance
+  _API_URL: "" # Defines _API_URL to satisfy the substitution requirement, even if empty/unused.
 
 options:
   logging: CLOUD_LOGGING_ONLY
