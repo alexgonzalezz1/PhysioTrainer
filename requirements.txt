@@ -11,7 +11,7 @@ psycopg2-binary==2.9.9
 requests==2.31.0
 
 # Google Cloud / Vertex AI
-google-cloud-aiplatform==1.38.1
+google-cloud-aiplatform==1.42.1
 google-auth==2.27.0
 
 # Data Processing
