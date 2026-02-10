@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.repositories import EjercicioRepository, RegistroRepository
-from app.services import get_gemini_service, GeminiService
+from app.services import get_bedrock_service, BedrockService
 from app.schemas import (
     ChatMessage,
     ChatResponse,
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 async def process_chat_message(
     message: ChatMessage,
     session: AsyncSession = Depends(get_session),
-    gemini: GeminiService = Depends(get_gemini_service)
+    bedrock: BedrockService = Depends(get_bedrock_service)
 ):
     """
     Process natural language message and extract exercise data.
@@ -26,7 +26,7 @@ async def process_chat_message(
     Example: "Hoy búlgaras 3x10 con 12kg, dolor 2"
     """
     # Extract exercise data from message
-    datos = await gemini.extraer_datos_ejercicio(message.mensaje)
+    datos = await bedrock.extraer_datos_ejercicio(message.mensaje)
     
     if not datos:
         return ChatResponse(
@@ -58,7 +58,7 @@ async def process_chat_message(
     historial_dolor = await registro_repo.get_recent_dolor(ejercicio.id)
     volumen = registro.series * registro.reps * registro.peso
     
-    recomendacion = await gemini.generar_recomendacion(
+    recomendacion = await bedrock.generar_recomendacion(
         ejercicio=datos.ejercicio,
         dolor_actual=datos.dolor_intra,
         historial_dolor=historial_dolor,

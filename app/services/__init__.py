@@ -1,6 +1,6 @@
 """Services for business logic and external integrations."""
 
-from app.services.gemini_service import GeminiService, get_gemini_service
+from app.services.bedrock_service import BedrockService, get_bedrock_service
 from app.services.progresion_service import (
     EstadoSemaforo,
     RecomendacionProgresion,
@@ -11,8 +11,8 @@ from app.services.progresion_service import (
 )
 
 __all__ = [
-    "GeminiService", 
-    "get_gemini_service",
+    "BedrockService", 
+    "get_bedrock_service",
     "EstadoSemaforo",
     "RecomendacionProgresion",
     "calcular_estado_semaforo",

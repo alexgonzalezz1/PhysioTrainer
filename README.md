@@ -1,8 +1,6 @@
 # PhysioTrainer - Asistente de Rehabilitación con IA
 
-[![Deploy to Cloud Run](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run)
-
-Aplicación de seguimiento de rehabilitación funcional que vincula la carga de entrenamiento con la respuesta de dolor, utilizando **Gemini 1.5** vía **Vertex AI** para el procesamiento de lenguaje natural.
+Aplicación de seguimiento de rehabilitación funcional que vincula la carga de entrenamiento con la respuesta de dolor, utilizando **AWS Bedrock (Claude 3.5)** para el procesamiento de lenguaje natural.
 
 ## 🚀 Características
 
@@ -34,14 +32,15 @@ PhysioTrainer/
 │   ├── repositories/       # Capa de datos
 │   ├── schemas/            # Schemas Pydantic
 │   ├── services/           # Lógica de negocio
-│   │   ├── gemini_service.py    # Integración Vertex AI
+│   │   ├── bedrock_service.py   # Integración AWS Bedrock
 │   │   └── progresion_service.py # Regla del semáforo
 │   └── main.py             # Aplicación FastAPI
 ├── frontend/               # Frontend Streamlit (simple)
 ├── frontend-react/         # Frontend Next.js (completo)
 ├── tests/                  # Tests pytest
-├── deploy-gcp.sh          # 🚀 Script de despliegue automático
-├── cloudbuild.yaml        # CI/CD con Cloud Build
+├── deploy-aws.sh          # 🚀 Script de despliegue automático AWS
+├── cleanup-aws.sh         # 🗑️ Script de limpieza AWS
+├── buildspec.yml          # CI/CD con AWS CodeBuild
 ├── Dockerfile             # Docker para API
 ├── docker-compose.yml     # Desarrollo local
 └── README.md
@@ -49,290 +48,244 @@ PhysioTrainer/
 
 ---
 
-## ☁️ DESPLIEGUE EN GOOGLE CLOUD PLATFORM
+## ☁️ DESPLIEGUE EN AMAZON WEB SERVICES
 
 ### 🚀 Opción 1: Despliegue Automático (Recomendado)
 
-#### Paso 1: Abrir Cloud Shell
+#### Requisitos Previos
 
-1. Ve a [Google Cloud Console](https://console.cloud.google.com)
-2. Selecciona o crea un proyecto
-3. Haz clic en el icono de **Cloud Shell** (terminal) en la barra superior
+1. **AWS CLI instalado** y configurado con credenciales:
+   ```bash
+   aws configure
+   ```
+2. **Docker instalado** en tu máquina local o usar AWS CloudShell
+3. **Acceso a Bedrock habilitado** en tu cuenta AWS (para Claude 3.5)
 
-#### Paso 2: Clonar el repositorio
+#### Paso 1: Clonar el repositorio
 
 ```bash
-git clone https://github.com/TU_USUARIO/PhysioTrainer.git
+git clone https://github.com/alexgonzalezz1/PhysioTrainer.git
 cd PhysioTrainer
 ```
 
-#### Paso 3: Ejecutar script de despliegue
+#### Paso 2: Ejecutar script de despliegue
 
 ```bash
 # Dar permisos de ejecución
-chmod +x deploy-gcp.sh
+chmod +x deploy-aws.sh
 
 # Ejecutar el despliegue
-./deploy-gcp.sh
+./deploy-aws.sh
 ```
 
 El script automáticamente:
-- ✅ Habilita las APIs necesarias
-- ✅ Crea Artifact Registry
-- ✅ Crea instancia Cloud SQL (PostgreSQL)
-- ✅ Configura Secret Manager
-- ✅ Construye y despliega la imagen Docker
-- ✅ Configura permisos IAM
-- ✅ Despliega en Cloud Run
+- ✅ Crea repositorio en Amazon ECR
+- ✅ Configura VPC, Subnets y Security Groups
+- ✅ Crea instancia Amazon RDS (PostgreSQL)
+- ✅ Configura AWS Secrets Manager
+- ✅ Crea roles IAM con permisos para Bedrock
+- ✅ Construye y sube la imagen Docker a ECR
+- ✅ Despliega en Amazon ECS Fargate
 
 ---
 
 ### 📋 Opción 2: Despliegue Manual Paso a Paso
 
-#### Paso 1: Configurar el proyecto
+#### Paso 1: Configurar variables
 
 ```bash
-# En Cloud Shell
-export PROJECT_ID=$(gcloud config get-value project)
-export REGION=us-central1
+export AWS_REGION=us-east-1
+export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+export APP_NAME=physiotrainer
 
-# Verificar proyecto
-echo "Proyecto: $PROJECT_ID"
+echo "Cuenta: $AWS_ACCOUNT_ID"
+echo "Región: $AWS_REGION"
 ```
 
-#### Paso 2: Habilitar APIs
+#### Paso 2: Crear repositorio ECR
 
 ```bash
-gcloud services enable \
-    cloudbuild.googleapis.com \
-    run.googleapis.com \
-    sqladmin.googleapis.com \
-    secretmanager.googleapis.com \
-    aiplatform.googleapis.com \
-    artifactregistry.googleapis.com
+aws ecr create-repository \
+    --repository-name $APP_NAME \
+    --region $AWS_REGION \
+    --image-scanning-configuration scanOnPush=true
+
+# Login a ECR
+aws ecr get-login-password --region $AWS_REGION | \
+    docker login --username AWS --password-stdin \
+    ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
 ```
 
-#### Paso 3: Crear Artifact Registry
+#### Paso 3: Crear VPC y Networking
 
 ```bash
-gcloud artifacts repositories create physiotrainer \
-    --repository-format=docker \
-    --location=$REGION \
-    --description="PhysioTrainer Docker images"
+# Crear VPC
+VPC_ID=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --query 'Vpc.VpcId' --output text)
+aws ec2 create-tags --resources $VPC_ID --tags Key=Name,Value=${APP_NAME}-vpc
+aws ec2 modify-vpc-attribute --vpc-id $VPC_ID --enable-dns-hostnames
+aws ec2 modify-vpc-attribute --vpc-id $VPC_ID --enable-dns-support
+
+# Crear Internet Gateway
+IGW_ID=$(aws ec2 create-internet-gateway --query 'InternetGateway.InternetGatewayId' --output text)
+aws ec2 attach-internet-gateway --vpc-id $VPC_ID --internet-gateway-id $IGW_ID
+
+# Crear Subnets
+SUBNET_1=$(aws ec2 create-subnet --vpc-id $VPC_ID --cidr-block 10.0.1.0/24 --availability-zone ${AWS_REGION}a --query 'Subnet.SubnetId' --output text)
+SUBNET_2=$(aws ec2 create-subnet --vpc-id $VPC_ID --cidr-block 10.0.2.0/24 --availability-zone ${AWS_REGION}b --query 'Subnet.SubnetId' --output text)
 ```
 
-#### Paso 4: Crear Cloud SQL
+#### Paso 4: Crear RDS PostgreSQL
 
 ```bash
 # Generar contraseña segura
-export DB_PASSWORD=$(openssl rand -base64 32)
+export DB_PASSWORD=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32)
 echo "Contraseña DB: $DB_PASSWORD"  # ¡GUARDAR!
 
-# Crear instancia (tarda ~5 minutos)
-gcloud sql instances create physiotrainer-db \
-    --database-version=POSTGRES_15 \
-    --tier=db-f1-micro \
-    --region=$REGION \
-    --root-password=$DB_PASSWORD
+# Crear DB Subnet Group
+aws rds create-db-subnet-group \
+    --db-subnet-group-name ${APP_NAME}-db-subnet-group \
+    --db-subnet-group-description "Subnet group for PhysioTrainer" \
+    --subnet-ids $SUBNET_1 $SUBNET_2
 
-# Crear base de datos
-gcloud sql databases create physiotrainer \
-    --instance=physiotrainer-db
-
-# Crear usuario
-gcloud sql users create physiotrainer \
-    --instance=physiotrainer-db \
-    --password=$DB_PASSWORD
+# Crear instancia RDS
+aws rds create-db-instance \
+    --db-instance-identifier ${APP_NAME}-db \
+    --db-instance-class db.t3.micro \
+    --engine postgres \
+    --engine-version 15.4 \
+    --master-username physiotrainer \
+    --master-user-password $DB_PASSWORD \
+    --allocated-storage 20 \
+    --db-name physiotrainer
 ```
 
-#### Paso 5: Configurar Secret Manager
+#### Paso 5: Crear secreto en Secrets Manager
 
 ```bash
-# Obtener connection name
-DB_CONNECTION=$(gcloud sql instances describe physiotrainer-db \
-    --format="value(connectionName)")
+# Obtener endpoint de RDS (después de que esté disponible)
+DB_ENDPOINT=$(aws rds describe-db-instances \
+    --db-instance-identifier ${APP_NAME}-db \
+    --query "DBInstances[0].Endpoint.Address" --output text)
 
-# Crear secreto con DATABASE_URL
-echo -n "postgresql+asyncpg://physiotrainer:${DB_PASSWORD}@/physiotrainer?host=/cloudsql/${DB_CONNECTION}" | \
-    gcloud secrets create physiotrainer-db-url --data-file=-
+# Crear secreto
+aws secretsmanager create-secret \
+    --name ${APP_NAME}/database-url \
+    --secret-string "postgresql+asyncpg://physiotrainer:${DB_PASSWORD}@${DB_ENDPOINT}:5432/physiotrainer"
 ```
 
-#### Paso 6: Construir imagen Docker
+#### Paso 6: Crear ECS Cluster y Task Definition
 
 ```bash
-# Clonar repo si no lo has hecho
-git clone https://github.com/TU_USUARIO/PhysioTrainer.git
-cd PhysioTrainer
-
-# Construir y subir imagen
-gcloud builds submit \
-    --tag $REGION-docker.pkg.dev/$PROJECT_ID/physiotrainer/physiotrainer-api:latest
-```
-
-#### Paso 7: Configurar permisos IAM
-
-```bash
-# Obtener service account
-PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
-SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
-
-# Permisos para Secret Manager
-gcloud secrets add-iam-policy-binding physiotrainer-db-url \
-    --member="serviceAccount:${SA}" \
-    --role="roles/secretmanager.secretAccessor"
-
-# Permisos para Cloud SQL
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:${SA}" \
-    --role="roles/cloudsql.client"
-
-# Permisos para Vertex AI
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:${SA}" \
-    --role="roles/aiplatform.user"
-```
-
-#### Paso 8: Desplegar en Cloud Run
-
-```bash
-gcloud run deploy physiotrainer-api \
-    --image $REGION-docker.pkg.dev/$PROJECT_ID/physiotrainer/physiotrainer-api:latest \
-    --region $REGION \
-    --platform managed \
-    --allow-unauthenticated \
-    --add-cloudsql-instances $DB_CONNECTION \
-    --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID,GCP_LOCATION=$REGION" \
-    --set-secrets "DATABASE_URL=physiotrainer-db-url:latest" \
-    --memory 512Mi \
-    --cpu 1 \
-    --min-instances 0 \
-    --max-instances 10
-```
-
-#### Paso 9: Obtener URL
-
-```bash
-# Ver URL del servicio
-gcloud run services describe physiotrainer-api \
-    --region $REGION \
-    --format="value(status.url)"
-```
-
----
-
-### 🔄 Opción 3: CI/CD con Cloud Build (GitHub)
-
-#### Conectar repositorio
-
-1. Ve a [Cloud Build Triggers](https://console.cloud.google.com/cloud-build/triggers)
-2. Haz clic en **Conectar repositorio**
-3. Selecciona **GitHub** y autoriza
-4. Selecciona el repositorio **PhysioTrainer**
-
-#### Crear trigger
-
-```bash
-# Obtener DB_CONNECTION primero
-DB_CONNECTION=$(gcloud sql instances describe physiotrainer-db \
-    --format="value(connectionName)")
-
-# Crear trigger
-gcloud builds triggers create github \
-    --repo-name=PhysioTrainer \
-    --repo-owner=TU_USUARIO \
-    --branch-pattern="^main$" \
-    --build-config=cloudbuild.yaml \
-    --substitutions="_REGION=us-central1,_DB_CONNECTION=$DB_CONNECTION"
-```
-
-Ahora cada push a `main` desplegará automáticamente.
-
----
-
-## 🖥️ Desplegar Frontend React
-
-```bash
-cd frontend-react
-
-# Obtener URL de la API
-API_URL=$(gcloud run services describe physiotrainer-api \
-    --region $REGION --format="value(status.url)")
+# Crear cluster
+aws ecs create-cluster --cluster-name ${APP_NAME}-cluster
 
 # Construir imagen
-gcloud builds submit \
-    --tag $REGION-docker.pkg.dev/$PROJECT_ID/physiotrainer/physiotrainer-frontend:latest
-
-# Desplegar
-gcloud run deploy physiotrainer-frontend \
-    --image $REGION-docker.pkg.dev/$PROJECT_ID/physiotrainer/physiotrainer-frontend:latest \
-    --region $REGION \
-    --platform managed \
-    --allow-unauthenticated \
-    --set-env-vars "API_BASE_URL=$API_URL/api/v1" \
-    --memory 256Mi \
-    --min-instances 0 \
-    --max-instances 5
+docker build -t ${APP_NAME}:latest .
+docker tag ${APP_NAME}:latest ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${APP_NAME}:latest
+docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${APP_NAME}:latest
 ```
+
+#### Paso 7: Desplegar en ECS Fargate
+
+Registra una Task Definition y crea el servicio ECS. Ver `deploy-aws.sh` para los detalles completos.
 
 ---
 
-## 💰 Costos Estimados (GCP)
+### 🔄 Opción 3: CI/CD con AWS CodePipeline
 
-| Servicio | Tier | Costo Estimado/mes |
-|----------|------|-------------------|
-| Cloud Run (API) | 0-2 instancias | ~$0-10 |
-| Cloud Run (Frontend) | 0-1 instancias | ~$0-5 |
-| Cloud SQL | db-f1-micro | ~$10-15 |
-| Vertex AI (Gemini) | Por uso | ~$0-5 |
-| **Total estimado** | | **~$15-35/mes** |
-
-> 💡 **Tip**: Cloud Run cobra solo cuando hay tráfico. Con poco uso, el costo puede ser $0.
+1. Crear un proyecto en **AWS CodeBuild** apuntando a tu repositorio GitHub
+2. Usar el archivo `buildspec.yml` incluido
+3. Configurar **CodePipeline** para despliegue automático a ECS
 
 ---
 
 ## 🛠️ Desarrollo Local
 
-### Con Docker Compose
+### Requisitos
 
-```bash
-# Iniciar todos los servicios
-docker-compose up --build
+- Python 3.11+
+- Docker y Docker Compose
+- AWS CLI configurado (para Bedrock)
 
-# URLs locales:
-# - API: http://localhost:8000
-# - Docs: http://localhost:8000/docs
-# - Frontend React: http://localhost:3000
-# - Frontend Streamlit: http://localhost:8501
-```
+### Configuración
+
+1. **Clonar repositorio**:
+   ```bash
+   git clone https://github.com/alexgonzalezz1/PhysioTrainer.git
+   cd PhysioTrainer
+   ```
+
+2. **Crear archivo `.env`**:
+   ```bash
+   cp .env.example .env
+   # Editar .env con tus credenciales AWS
+   ```
+
+3. **Iniciar con Docker Compose**:
+   ```bash
+   docker-compose up -d
+   ```
+
+4. **Acceder a la aplicación**:
+   - API: http://localhost:8000
+   - Docs: http://localhost:8000/docs
+   - Frontend Streamlit: http://localhost:8501
 
 ### Sin Docker
 
 ```bash
-# Backend
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+# Crear entorno virtual
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+.\venv\Scripts\activate   # Windows
 
-# Frontend React
-cd frontend-react
-npm install
-npm run dev
+# Instalar dependencias
+pip install -r requirements.txt
+
+# Ejecutar
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ---
 
-## 📚 API Endpoints
+## 📊 API Endpoints
 
 | Método | Endpoint | Descripción |
 |--------|----------|-------------|
-| POST | `/api/v1/chat/` | Procesar mensaje natural |
+| POST | `/api/v1/chat/` | Procesar mensaje y extraer ejercicio |
 | GET | `/api/v1/ejercicios/` | Listar ejercicios |
 | POST | `/api/v1/ejercicios/` | Crear ejercicio |
 | GET | `/api/v1/registros/` | Listar registros |
-| GET | `/api/v1/registros/pendientes` | Registros sin dolor 24h |
-| PATCH | `/api/v1/registros/{id}/dolor-24h` | Actualizar dolor 24h |
-| GET | `/api/v1/informes/tendencias/{id}` | Datos para gráficos |
-| GET | `/api/v1/informes/mensual/{year}/{month}` | Informe mensual IA |
-| GET | `/health` | Health check |
+| PUT | `/api/v1/registros/{id}/dolor24h` | Actualizar dolor 24h |
+| GET | `/api/v1/informes/tendencias/{id}` | Obtener tendencias |
+| GET | `/api/v1/informes/mensual/{year}/{month}` | Informe mensual |
+
+---
+
+## 🧹 Limpieza de Recursos AWS
+
+Para eliminar todos los recursos y evitar costos:
+
+```bash
+chmod +x cleanup-aws.sh
+./cleanup-aws.sh
+```
+
+---
+
+## 💰 Estimación de Costos AWS
+
+| Servicio | Configuración | Costo Estimado/mes |
+|----------|---------------|-------------------|
+| ECS Fargate | 0.25 vCPU, 0.5GB RAM | ~$10-15 |
+| RDS PostgreSQL | db.t3.micro | ~$15-20 |
+| ECR | <1GB imágenes | ~$0.10 |
+| Secrets Manager | 1 secreto | ~$0.40 |
+| Bedrock (Claude) | Por uso | Variable* |
+
+*El costo de Bedrock depende del uso. Claude 3.5 Sonnet: ~$3/1M tokens input, ~$15/1M tokens output.
+
+**Total estimado**: ~$25-40/mes (sin incluir uso intensivo de Bedrock)
 
 ---
 
@@ -340,56 +293,43 @@ npm run dev
 
 | Variable | Descripción | Ejemplo |
 |----------|-------------|---------|
-| `DATABASE_URL` | URL de PostgreSQL | `postgresql+asyncpg://...` |
-| `GCP_PROJECT_ID` | ID del proyecto GCP | `my-project-123` |
-| `GCP_LOCATION` | Región de Vertex AI | `us-central1` |
-| `DEBUG` | Modo debug | `true` / `false` |
+| `DATABASE_URL` | URL de conexión PostgreSQL | `postgresql+asyncpg://...` |
+| `AWS_REGION` | Región de AWS | `us-east-1` |
+| `AWS_ACCESS_KEY_ID` | Access Key ID (local) | `AKIA...` |
+| `AWS_SECRET_ACCESS_KEY` | Secret Access Key (local) | `...` |
+| `BEDROCK_MODEL_ID` | ID del modelo Bedrock | `anthropic.claude-3-5-sonnet-20241022-v2:0` |
+| `DEBUG` | Modo debug | `True/False` |
 
 ---
 
-## 🧪 Tests
+## 🐛 Troubleshooting
 
-```bash
-# Ejecutar tests
-pytest
+### Error: "Access denied" al invocar Bedrock
 
-# Con cobertura
-pytest --cov=app tests/
-```
+1. Verifica que tienes acceso a Bedrock habilitado en tu cuenta
+2. Ve a AWS Console → Bedrock → Model Access → Request Access para Claude
+3. Verifica que el IAM Role tiene la política `BedrockAccess`
 
----
+### Error: Conexión a RDS rechazada
 
-## 🆘 Troubleshooting
+1. Verifica que el Security Group permite tráfico desde ECS
+2. Comprueba que RDS está en estado "Available"
+3. Revisa los logs en CloudWatch: `/ecs/physiotrainer`
 
-### Error: "Permission denied" en Cloud SQL
-```bash
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:${SA}" \
-    --role="roles/cloudsql.client"
-```
+### Error: Task no inicia en ECS
 
-### Error: "Secret not found"
-```bash
-# Verificar que el secreto existe
-gcloud secrets list
-
-# Recrear si es necesario
-gcloud secrets delete physiotrainer-db-url
-# Luego recrear con el paso 5
-```
-
-### Error: "Vertex AI API not enabled"
-```bash
-gcloud services enable aiplatform.googleapis.com
-```
-
-### Ver logs de Cloud Run
-```bash
-gcloud run services logs read physiotrainer-api --region $REGION
-```
+1. Revisa CloudWatch Logs para ver el error específico
+2. Verifica que la imagen existe en ECR
+3. Comprueba los permisos del Task Execution Role
 
 ---
 
-## 📄 Licencia
+## 📜 Licencia
 
-MIT License
+MIT License - ver [LICENSE](LICENSE) para más detalles.
+
+---
+
+## 👨‍💻 Autor
+
+Desarrollado para facilitar el seguimiento de rehabilitación funcional con tecnología de IA.

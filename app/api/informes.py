@@ -5,7 +5,7 @@ from typing import List
 
 from app.db import get_session
 from app.repositories import RegistroRepository
-from app.services import get_gemini_service, GeminiService
+from app.services import get_bedrock_service, BedrockService
 from app.schemas import TendenciaData, InformeMensual
 
 router = APIRouter(prefix="/informes", tags=["informes"])
@@ -37,7 +37,7 @@ async def get_monthly_report(
     year: int = Path(...),
     month: int = Path(..., ge=1, le=12),
     session: AsyncSession = Depends(get_session),
-    gemini: GeminiService = Depends(get_gemini_service)
+    bedrock: BedrockService = Depends(get_bedrock_service)
 ):
     """Generate monthly executive report with AI analysis."""
     if year < 2020 or year > 2030:
@@ -78,7 +78,7 @@ async def get_monthly_report(
     
     # Generate AI summary
     periodo = f"{month:02d}/{year}"
-    resumen = await gemini.generar_informe_mensual(datos_para_ia, periodo)
+    resumen = await bedrock.generar_informe_mensual(datos_para_ia, periodo)
     
     return InformeMensual(
         periodo=periodo,

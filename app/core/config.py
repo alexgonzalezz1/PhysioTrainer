@@ -8,16 +8,17 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://user:password@localhost:5432/physiotrainer"
     
-    # Google Cloud
-    gcp_project_id: str = "your-gcp-project-id"
-    gcp_location: str = "us-central1"
+    # AWS Configuration
+    aws_region: str = "us-east-1"
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
     
     # Application
     debug: bool = True
     secret_key: str = "your-secret-key-here"
     
-    # Gemini Model
-    gemini_model: str = "gemini-1.5-flash"
+    # AWS Bedrock Model (Claude 3.5 Sonnet)
+    bedrock_model_id: str = "anthropic.claude-3-5-sonnet-20241022-v2:0"
     
     class Config:
         env_file = ".env"
