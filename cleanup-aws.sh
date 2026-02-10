@@ -11,9 +11,11 @@ set -e
 AWS_REGION="${AWS_REGION:-us-east-1}"
 APP_NAME="physiotrainer"
 SERVICE_NAME="${APP_NAME}-api"
+FRONTEND_SERVICE_NAME="${APP_NAME}-frontend"
 CLUSTER_NAME="${APP_NAME}-cluster"
 DB_INSTANCE_NAME="${APP_NAME}-db"
 ECR_REPO_NAME="${APP_NAME}"
+ECR_FRONTEND_REPO_NAME="${APP_NAME}-frontend"
 
 echo "=============================================="
 echo "   🗑️  LIMPIEZA DE RECURSOS AWS"
@@ -22,6 +24,7 @@ echo "Este script eliminará:"
 echo "- ECS Cluster y Service: '$CLUSTER_NAME'"
 echo "- RDS Instance: '$DB_INSTANCE_NAME'"
 echo "- ECR Repository: '$ECR_REPO_NAME'"
+echo "- ECR Repository: '$ECR_FRONTEND_REPO_NAME'"
 echo "- Secrets Manager: secretos de la base de datos"
 echo "- VPC, Subnets, Security Groups, IAM Roles"
 echo ""
@@ -40,6 +43,10 @@ echo "Eliminando servicio ECS..."
 aws ecs update-service --cluster $CLUSTER_NAME --service $SERVICE_NAME --desired-count 0 --region $AWS_REGION 2>/dev/null || true
 aws ecs delete-service --cluster $CLUSTER_NAME --service $SERVICE_NAME --force --region $AWS_REGION 2>/dev/null || echo "Servicio ECS no encontrado"
 
+echo "Eliminando servicio ECS (frontend)..."
+aws ecs update-service --cluster $CLUSTER_NAME --service $FRONTEND_SERVICE_NAME --desired-count 0 --region $AWS_REGION 2>/dev/null || true
+aws ecs delete-service --cluster $CLUSTER_NAME --service $FRONTEND_SERVICE_NAME --force --region $AWS_REGION 2>/dev/null || echo "Servicio ECS frontend no encontrado"
+
 # 2. Eliminar ECS Cluster
 echo "Eliminando cluster ECS..."
 aws ecs delete-cluster --cluster $CLUSTER_NAME --region $AWS_REGION 2>/dev/null || echo "Cluster ECS no encontrado"
@@ -51,6 +58,9 @@ aws rds delete-db-instance --db-instance-identifier $DB_INSTANCE_NAME --skip-fin
 # 4. Eliminar ECR
 echo "Eliminando repositorio ECR..."
 aws ecr delete-repository --repository-name $ECR_REPO_NAME --force --region $AWS_REGION 2>/dev/null || echo "Repositorio ECR no encontrado"
+
+echo "Eliminando repositorio ECR (frontend)..."
+aws ecr delete-repository --repository-name $ECR_FRONTEND_REPO_NAME --force --region $AWS_REGION 2>/dev/null || echo "Repositorio ECR frontend no encontrado"
 
 # 5. Eliminar secreto
 echo "Eliminando secretos..."

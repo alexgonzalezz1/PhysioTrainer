@@ -3,6 +3,10 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# Build-time API base URL (inlined into the client bundle by Next.js)
+ARG API_BASE_URL
+ENV API_BASE_URL=${API_BASE_URL}
+
 # Copy package files
 COPY package*.json ./
 
@@ -21,6 +25,10 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
+
+# Keep the value available at runtime too (server components / diagnostics)
+ARG API_BASE_URL
+ENV API_BASE_URL=${API_BASE_URL}
 
 # Create non-root user
 RUN addgroup --system --gid 1001 nodejs

@@ -28,12 +28,14 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 APP_NAME="physiotrainer"
 SERVICE_NAME="${APP_NAME}-api"
+FRONTEND_SERVICE_NAME="${APP_NAME}-frontend"
 CLUSTER_NAME="${APP_NAME}-cluster"
 DB_INSTANCE_NAME="${APP_NAME}-db"
 DB_NAME="physiotrainer"
 DB_USER="physiotrainer"
 DB_PASSWORD="${DB_PASSWORD:-$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32)}"
 ECR_REPO_NAME="${APP_NAME}"
+ECR_FRONTEND_REPO_NAME="${APP_NAME}-frontend"
 VPC_CIDR="10.0.0.0/16"
 
 # ============================================================================
@@ -84,7 +86,18 @@ else
     print_warning "Repositorio ECR ya existe"
 fi
 
+if ! aws ecr describe-repositories --repository-names $ECR_FRONTEND_REPO_NAME --region $AWS_REGION &>/dev/null; then
+    aws ecr create-repository \
+        --repository-name $ECR_FRONTEND_REPO_NAME \
+        --region $AWS_REGION \
+        --image-scanning-configuration scanOnPush=true
+    print_success "Repositorio ECR frontend creado"
+else
+    print_warning "Repositorio ECR frontend ya existe"
+fi
+
 ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
+ECR_FRONTEND_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND_REPO_NAME}"
 
 # Login a ECR
 aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
@@ -145,10 +158,12 @@ ECS_SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$
 if [ "$ECS_SG_ID" == "None" ] || [ -z "$ECS_SG_ID" ]; then
     ECS_SG_ID=$(aws ec2 create-security-group --group-name ${APP_NAME}-ecs-sg --description "Security group for PhysioTrainer ECS" --vpc-id $VPC_ID --query 'GroupId' --output text --region $AWS_REGION)
     aws ec2 authorize-security-group-ingress --group-id $ECS_SG_ID --protocol tcp --port 8080 --cidr 0.0.0.0/0 --region $AWS_REGION
+    aws ec2 authorize-security-group-ingress --group-id $ECS_SG_ID --protocol tcp --port 3000 --cidr 0.0.0.0/0 --region $AWS_REGION
     aws ec2 authorize-security-group-egress --group-id $ECS_SG_ID --protocol -1 --cidr 0.0.0.0/0 --region $AWS_REGION 2>/dev/null || true
     print_success "Security Group ECS creado"
 else
     print_warning "Security Group ECS ya existe"
+    aws ec2 authorize-security-group-ingress --group-id $ECS_SG_ID --protocol tcp --port 3000 --cidr 0.0.0.0/0 --region $AWS_REGION 2>/dev/null || true
 fi
 
 # Security Group para RDS
@@ -455,17 +470,130 @@ fi
 # ============================================================================
 print_status "Esperando a que el servicio esté disponible..."
 
-sleep 30  # Esperar un poco para que la tarea inicie
+PUBLIC_IP=""
+API_URL=""
 
-TASK_ARN=$(aws ecs list-tasks --cluster $CLUSTER_NAME --service-name $SERVICE_NAME --query "taskArns[0]" --output text --region $AWS_REGION)
+for i in $(seq 1 30); do
+        TASK_ARN=$(aws ecs list-tasks --cluster $CLUSTER_NAME --service-name $SERVICE_NAME --query "taskArns[0]" --output text --region $AWS_REGION 2>/dev/null || echo "None")
+        if [ "$TASK_ARN" != "None" ] && [ -n "$TASK_ARN" ]; then
+                ENI_ID=$(aws ecs describe-tasks --cluster $CLUSTER_NAME --tasks $TASK_ARN --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" --output text --region $AWS_REGION 2>/dev/null || echo "")
+                if [ -n "$ENI_ID" ] && [ "$ENI_ID" != "None" ]; then
+                        PUBLIC_IP=$(aws ec2 describe-network-interfaces --network-interface-ids $ENI_ID --query "NetworkInterfaces[0].Association.PublicIp" --output text --region $AWS_REGION 2>/dev/null || echo "")
+                        if [ -n "$PUBLIC_IP" ] && [ "$PUBLIC_IP" != "None" ]; then
+                                API_URL="http://${PUBLIC_IP}:8080"
+                                break
+                        fi
+                fi
+        fi
+        sleep 10
+done
 
-if [ "$TASK_ARN" != "None" ] && [ -n "$TASK_ARN" ]; then
-    ENI_ID=$(aws ecs describe-tasks --cluster $CLUSTER_NAME --tasks $TASK_ARN --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" --output text --region $AWS_REGION)
-    
-    if [ -n "$ENI_ID" ] && [ "$ENI_ID" != "None" ]; then
-        PUBLIC_IP=$(aws ec2 describe-network-interfaces --network-interface-ids $ENI_ID --query "NetworkInterfaces[0].Association.PublicIp" --output text --region $AWS_REGION)
-        API_URL="http://${PUBLIC_IP}:8080"
-    fi
+# ==========================================================================
+# PASO 13: Desplegar Frontend (opcional)
+# ==========================================================================
+read -p "¿Desplegar también el frontend React (Next.js)? (y/n): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if [ -z "$API_URL" ]; then
+                print_error "No se pudo determinar la URL pública de la API. Reintenta cuando la tarea tenga IP pública."
+        else
+                print_status "Construyendo y subiendo imagen del frontend a ECR..."
+        
+                docker build -t ${ECR_FRONTEND_REPO_NAME}:latest \
+                        --build-arg API_BASE_URL="${API_URL}/api/v1" \
+                        ./frontend-react
+                docker tag ${ECR_FRONTEND_REPO_NAME}:latest ${ECR_FRONTEND_URI}:latest
+                docker push ${ECR_FRONTEND_URI}:latest
+                print_success "Imagen frontend subida a ECR: ${ECR_FRONTEND_URI}:latest"
+        
+                print_status "Registrando Task Definition del frontend..."
+                cat > /tmp/frontend-task-definition.json <<EOF
+{
+    "family": "${APP_NAME}-frontend-task",
+    "networkMode": "awsvpc",
+    "requiresCompatibilities": ["FARGATE"],
+    "cpu": "256",
+    "memory": "512",
+    "executionRoleArn": "${TASK_EXEC_ROLE_ARN}",
+    "taskRoleArn": "${TASK_ROLE_ARN}",
+    "containerDefinitions": [
+        {
+            "name": "${FRONTEND_SERVICE_NAME}",
+            "image": "${ECR_FRONTEND_URI}:latest",
+            "portMappings": [
+                {
+                    "containerPort": 3000,
+                    "protocol": "tcp"
+                }
+            ],
+            "essential": true,
+            "environment": [
+                {"name": "PORT", "value": "3000"},
+                {"name": "HOSTNAME", "value": "0.0.0.0"},
+                {"name": "API_BASE_URL", "value": "${API_URL}/api/v1"}
+            ],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/${APP_NAME}",
+                    "awslogs-region": "${AWS_REGION}",
+                    "awslogs-stream-prefix": "frontend"
+                }
+            }
+        }
+    ]
+}
+EOF
+
+                aws ecs register-task-definition --cli-input-json file:///tmp/frontend-task-definition.json --region $AWS_REGION
+                rm -f /tmp/frontend-task-definition.json
+                print_success "Task Definition frontend registrada"
+        
+                print_status "Desplegando servicio frontend en ECS Fargate..."
+                FRONTEND_SERVICE_ARN=$(aws ecs describe-services --cluster $CLUSTER_NAME --services $FRONTEND_SERVICE_NAME --query "services[0].serviceArn" --output text --region $AWS_REGION 2>/dev/null || true)
+                if [ -z "$FRONTEND_SERVICE_ARN" ] || [ "$FRONTEND_SERVICE_ARN" == "None" ]; then
+                        aws ecs create-service \
+                            --cluster $CLUSTER_NAME \
+                            --service-name $FRONTEND_SERVICE_NAME \
+                            --task-definition ${APP_NAME}-frontend-task \
+                            --desired-count 1 \
+                            --launch-type FARGATE \
+                            --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_1,$SUBNET_2],securityGroups=[$ECS_SG_ID],assignPublicIp=ENABLED}" \
+                            --region $AWS_REGION
+                        print_success "Servicio frontend ECS creado"
+                else
+                        aws ecs update-service \
+                            --cluster $CLUSTER_NAME \
+                            --service $FRONTEND_SERVICE_NAME \
+                            --task-definition ${APP_NAME}-frontend-task \
+                            --force-new-deployment \
+                            --region $AWS_REGION
+                        print_warning "Servicio frontend ECS actualizado"
+                fi
+        
+                print_status "Obteniendo IP pública del frontend..."
+                FRONTEND_PUBLIC_IP=""
+                for i in $(seq 1 30); do
+                        FRONTEND_TASK_ARN=$(aws ecs list-tasks --cluster $CLUSTER_NAME --service-name $FRONTEND_SERVICE_NAME --query "taskArns[0]" --output text --region $AWS_REGION 2>/dev/null || echo "None")
+                        if [ "$FRONTEND_TASK_ARN" != "None" ] && [ -n "$FRONTEND_TASK_ARN" ]; then
+                                FRONTEND_ENI_ID=$(aws ecs describe-tasks --cluster $CLUSTER_NAME --tasks $FRONTEND_TASK_ARN --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" --output text --region $AWS_REGION 2>/dev/null || echo "")
+                                if [ -n "$FRONTEND_ENI_ID" ] && [ "$FRONTEND_ENI_ID" != "None" ]; then
+                                        FRONTEND_PUBLIC_IP=$(aws ec2 describe-network-interfaces --network-interface-ids $FRONTEND_ENI_ID --query "NetworkInterfaces[0].Association.PublicIp" --output text --region $AWS_REGION 2>/dev/null || echo "")
+                                        if [ -n "$FRONTEND_PUBLIC_IP" ] && [ "$FRONTEND_PUBLIC_IP" != "None" ]; then
+                                                break
+                                        fi
+                                fi
+                        fi
+                        sleep 10
+                done
+
+                if [ -n "$FRONTEND_PUBLIC_IP" ] && [ "$FRONTEND_PUBLIC_IP" != "None" ]; then
+                        FRONTEND_URL="http://${FRONTEND_PUBLIC_IP}:3000"
+                        print_success "Frontend URL: $FRONTEND_URL"
+                else
+                        print_warning "No se pudo determinar la IP pública del frontend aún. Revisa ECS tasks y reintenta."
+                fi
+        fi
 fi
 
 # ============================================================================
