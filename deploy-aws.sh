@@ -181,7 +181,7 @@ if ! aws rds describe-db-instances --db-instance-identifier $DB_INSTANCE_NAME --
         --db-instance-identifier $DB_INSTANCE_NAME \
         --db-instance-class db.t3.micro \
         --engine postgres \
-        --engine-version 15.4 \
+        --engine-version 17.7 \
         --master-username $DB_USER \
         --master-user-password $DB_PASSWORD \
         --allocated-storage 20 \
