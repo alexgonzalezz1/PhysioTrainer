@@ -189,7 +189,9 @@ if ! aws rds describe-db-instances --db-instance-identifier $DB_INSTANCE_NAME --
         --vpc-security-group-ids $RDS_SG_ID \
         --db-subnet-group-name ${APP_NAME}-db-subnet-group \
         --publicly-accessible \
-        --backup-retention-period 7 \
+        --backup-retention-period 0 \
+        --no-multi-az \
+        --storage-type gp2 \
         --region $AWS_REGION
     
     print_status "Esperando a que RDS esté disponible..."
