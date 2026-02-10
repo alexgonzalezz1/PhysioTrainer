@@ -35,12 +35,12 @@ PhysioTrainer/
 │   │   ├── bedrock_service.py   # Integración AWS Bedrock
 │   │   └── progresion_service.py # Regla del semáforo
 │   └── main.py             # Aplicación FastAPI
-├── frontend/               # Frontend Streamlit (simple)
 ├── frontend-react/         # Frontend Next.js (completo)
 ├── tests/                  # Tests pytest
 ├── deploy-aws.sh          # 🚀 Script de despliegue automático AWS
 ├── cleanup-aws.sh         # 🗑️ Script de limpieza AWS
-├── buildspec.yml          # CI/CD con AWS CodeBuild
+├── buildspec-backend.yml  # CI/CD Backend con AWS CodeBuild
+├── buildspec-frontend.yml # CI/CD Frontend con AWS CodeBuild
 ├── Dockerfile             # Docker para API
 ├── docker-compose.yml     # Desarrollo local
 └── README.md
@@ -227,9 +227,9 @@ Registra una Task Definition y crea el servicio ECS. Ver `deploy-aws.sh` para lo
    ```
 
 4. **Acceder a la aplicación**:
-   - API: http://localhost:8000
-   - Docs: http://localhost:8000/docs
-   - Frontend Streamlit: http://localhost:8501
+   - API: http://localhost:8080
+   - Docs: http://localhost:8080/docs
+   - Frontend React: http://localhost:3000
 
 ### Sin Docker
 

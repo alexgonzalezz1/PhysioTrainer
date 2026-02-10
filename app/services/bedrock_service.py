@@ -2,6 +2,7 @@
 
 import json
 import re
+import logging
 from typing import Optional
 import boto3
 from botocore.config import Config
@@ -9,6 +10,7 @@ from botocore.config import Config
 from app.core.config import get_settings
 from app.schemas import EjercicioExtraido
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
@@ -17,8 +19,12 @@ class BedrockService:
     
     def __init__(self):
         """Initialize AWS Bedrock client."""
+        # Use bedrock_region (defaults to us-east-1 where Claude is available)
+        bedrock_region = settings.bedrock_region or settings.aws_region
+        logger.info(f"Initializing Bedrock client in region: {bedrock_region}, model: {settings.bedrock_model_id}")
+        
         boto_config = Config(
-            region_name=settings.aws_region,
+            region_name=bedrock_region,
             retries={'max_attempts': 3, 'mode': 'standard'}
         )
         
@@ -120,7 +126,7 @@ Responde SOLO con el JSON, sin texto adicional."""
             return EjercicioExtraido(**data)
             
         except Exception as e:
-            print(f"Error extracting exercise data: {e}")
+            logger.error(f"Error extracting exercise data: {e}", exc_info=True)
             return None
     
     async def generar_recomendacion(
@@ -161,7 +167,7 @@ Responde en español, de forma concisa y motivadora (máximo 2-3 oraciones)."""
         try:
             return self._invoke_claude(prompt, max_tokens=200, temperature=0.7)
         except Exception as e:
-            print(f"Error generating recommendation: {e}")
+            logger.error(f"Error generating recommendation: {e}", exc_info=True)
             return self._recomendacion_fallback(dolor_actual)
     
     def _recomendacion_fallback(self, dolor: int) -> str:
@@ -207,7 +213,7 @@ Escribe en español, de forma profesional pero accesible. Máximo 300 palabras."
         try:
             return self._invoke_claude(prompt, max_tokens=800, temperature=0.5)
         except Exception as e:
-            print(f"Error generating monthly report: {e}")
+            logger.error(f"Error generating monthly report: {e}", exc_info=True)
             return "No se pudo generar el informe automático. Por favor, revisa los datos manualmente."
 
 

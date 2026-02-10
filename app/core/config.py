@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     
+    # AWS Bedrock - uses a separate region since Claude may not be available in all regions
+    bedrock_region: str = "us-east-1"
+    
     # Application
     debug: bool = True
     secret_key: str = "your-secret-key-here"

@@ -25,41 +25,27 @@ services:
     container_name: physiotrainer-api
     environment:
       DATABASE_URL: postgresql+asyncpg://physiotrainer:physiotrainer_secret@db:5432/physiotrainer
-      GCP_PROJECT_ID: ${GCP_PROJECT_ID}
-      GCP_LOCATION: ${GCP_LOCATION:-us-central1}
-      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/service-account.json
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-anthropic.claude-3-5-sonnet-20241022-v2:0}
       DEBUG: "false"
-    volumes:
-      - ./credentials:/app/credentials:ro
+      PORT: "8080"
     ports:
-      - "8000:8000"
+      - "8080:8080"
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
 
-  # Streamlit Frontend (Simple)
-  frontend-streamlit:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-    container_name: physiotrainer-streamlit
-    environment:
-      API_BASE_URL: http://api:8000/api/v1
-    ports:
-      - "8501:8501"
-    depends_on:
-      - api
-    restart: unless-stopped
-
-  # React/Next.js Frontend (Full)
+  # React/Next.js Frontend
   frontend-react:
     build:
       context: ./frontend-react
       dockerfile: Dockerfile
     container_name: physiotrainer-react
     environment:
-      API_BASE_URL: http://api:8000/api/v1
+      API_BASE_URL: http://api:8080/api/v1
     ports:
       - "3000:3000"
     depends_on:

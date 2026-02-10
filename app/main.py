@@ -43,7 +43,7 @@ def create_app() -> FastAPI:
     """Create and configure FastAPI application."""
     app = FastAPI(
         title="PhysioTrainer API",
-        description="AI-powered rehabilitation tracking assistant using Vertex AI / Gemini",
+        description="AI-powered rehabilitation tracking assistant using AWS Bedrock / Claude",
         version="1.0.0",
         lifespan=lifespan,
         docs_url="/docs",
