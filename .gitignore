@@ -37,9 +37,10 @@ env/
 .env.local
 *.env
 
-# Google Cloud credentials
-*.json
-!package.json
+# Google Cloud / AWS credentials (service account key files)
+*-credentials.json
+*-key.json
+service-account*.json
 
 # Database
 *.db
