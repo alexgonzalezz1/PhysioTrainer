@@ -268,51 +268,22 @@ print_status "Configurando IAM Roles..."
 TASK_EXEC_ROLE_NAME="${APP_NAME}-ecs-task-execution-role"
 TASK_EXEC_ROLE_ARN=$(aws iam get-role --role-name $TASK_EXEC_ROLE_NAME --query "Role.Arn" --output text 2>/dev/null || true)
 
-if [ -z "$TASK_EXEC_ROLE_ARN" ]; then
-    # Create trust policy
-    cat > /tmp/trust-policy.json <<EOF
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "Service": "ecs-tasks.amazonaws.com"
-            },
-            "Action": "sts:AssumeRole"
-        }
-    ]
-}
-EOF
+ECS_TRUST_POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
 
+if [ -z "$TASK_EXEC_ROLE_ARN" ]; then
     aws iam create-role \
         --role-name $TASK_EXEC_ROLE_NAME \
-        --assume-role-policy-document file:///tmp/trust-policy.json
+        --assume-role-policy-document "$ECS_TRUST_POLICY"
     
     aws iam attach-role-policy \
         --role-name $TASK_EXEC_ROLE_NAME \
         --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
     
-    # Permissions for Secrets Manager
-    cat > /tmp/secrets-policy.json <<EOF
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "secretsmanager:GetSecretValue"
-            ],
-            "Resource": "$SECRET_ARN"
-        }
-    ]
-}
-EOF
-
+    SECRETS_POLICY=$(printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["secretsmanager:GetSecretValue"],"Resource":"%s"}]}' "$SECRET_ARN")
     aws iam put-role-policy \
         --role-name $TASK_EXEC_ROLE_NAME \
         --policy-name SecretsManagerAccess \
-        --policy-document file:///tmp/secrets-policy.json
+        --policy-document "$SECRETS_POLICY"
     
     TASK_EXEC_ROLE_ARN=$(aws iam get-role --role-name $TASK_EXEC_ROLE_NAME --query "Role.Arn" --output text)
     print_success "IAM Task Execution Role creado"
@@ -327,38 +298,19 @@ TASK_ROLE_ARN=$(aws iam get-role --role-name $TASK_ROLE_NAME --query "Role.Arn" 
 if [ -z "$TASK_ROLE_ARN" ]; then
     aws iam create-role \
         --role-name $TASK_ROLE_NAME \
-        --assume-role-policy-document file:///tmp/trust-policy.json
+        --assume-role-policy-document "$ECS_TRUST_POLICY"
     
-    # Bedrock policy
-    cat > /tmp/bedrock-policy.json <<EOF
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "bedrock:InvokeModel",
-                "bedrock:InvokeModelWithResponseStream"
-            ],
-            "Resource": "arn:aws:bedrock:*::foundation-model/anthropic.*"
-        }
-    ]
-}
-EOF
-
+    BEDROCK_POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":"arn:aws:bedrock:*::foundation-model/anthropic.*"}]}'
     aws iam put-role-policy \
         --role-name $TASK_ROLE_NAME \
         --policy-name BedrockAccess \
-        --policy-document file:///tmp/bedrock-policy.json
+        --policy-document "$BEDROCK_POLICY"
     
     TASK_ROLE_ARN=$(aws iam get-role --role-name $TASK_ROLE_NAME --query "Role.Arn" --output text)
     print_success "IAM Task Role creado"
 else
     print_warning "IAM Task Role ya existe"
 fi
-
-# Cleanup temp files
-rm -f /tmp/trust-policy.json /tmp/secrets-policy.json /tmp/bedrock-policy.json
 
 # ============================================================================
 # PASO 8: Crear CodeBuild y construir imágenes Docker en la nube
@@ -369,62 +321,18 @@ print_status "Configurando AWS CodeBuild..."
 CODEBUILD_ROLE_ARN=$(aws iam get-role --role-name $CODEBUILD_ROLE_NAME --query "Role.Arn" --output text 2>/dev/null || true)
 
 if [ -z "$CODEBUILD_ROLE_ARN" ]; then
-    cat > /tmp/codebuild-trust-policy.json <<EOF
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": { "Service": "codebuild.amazonaws.com" },
-            "Action": "sts:AssumeRole"
-        }
-    ]
-}
-EOF
-
+    CODEBUILD_TRUST='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"codebuild.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
     aws iam create-role \
         --role-name $CODEBUILD_ROLE_NAME \
-        --assume-role-policy-document file:///tmp/codebuild-trust-policy.json
+        --assume-role-policy-document "$CODEBUILD_TRUST"
 
-    # Permisos: ECR push, CloudWatch Logs, S3 (cache)
-    cat > /tmp/codebuild-policy.json <<EOF
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "ecr:GetAuthorizationToken",
-                "ecr:BatchCheckLayerAvailability",
-                "ecr:GetDownloadUrlForLayer",
-                "ecr:BatchGetImage",
-                "ecr:PutImage",
-                "ecr:InitiateLayerUpload",
-                "ecr:UploadLayerPart",
-                "ecr:CompleteLayerUpload"
-            ],
-            "Resource": "*"
-        },
-        {
-            "Effect": "Allow",
-            "Action": [
-                "logs:CreateLogGroup",
-                "logs:CreateLogStream",
-                "logs:PutLogEvents"
-            ],
-            "Resource": "*"
-        }
-    ]
-}
-EOF
-
+    CODEBUILD_PERMS='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ecr:GetAuthorizationToken","ecr:BatchCheckLayerAvailability","ecr:GetDownloadUrlForLayer","ecr:BatchGetImage","ecr:PutImage","ecr:InitiateLayerUpload","ecr:UploadLayerPart","ecr:CompleteLayerUpload"],"Resource":"*"},{"Effect":"Allow","Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],"Resource":"*"}]}'
     aws iam put-role-policy \
         --role-name $CODEBUILD_ROLE_NAME \
         --policy-name CodeBuildPermissions \
-        --policy-document file:///tmp/codebuild-policy.json
+        --policy-document "$CODEBUILD_PERMS"
 
     CODEBUILD_ROLE_ARN=$(aws iam get-role --role-name $CODEBUILD_ROLE_NAME --query "Role.Arn" --output text)
-    rm -f /tmp/codebuild-trust-policy.json /tmp/codebuild-policy.json
 
     print_success "IAM Role de CodeBuild creado"
     # Esperar propagación IAM
@@ -436,31 +344,8 @@ fi
 # --- Proyecto CodeBuild para BACKEND ---
 if ! aws codebuild batch-get-projects --names $CODEBUILD_PROJECT_BACKEND --query "projects[0].name" --output text --region $AWS_REGION 2>/dev/null | grep -q $CODEBUILD_PROJECT_BACKEND; then
     print_status "Creando proyecto CodeBuild para backend..."
-    cat > /tmp/codebuild-backend.json <<EOF
-{
-    "name": "${CODEBUILD_PROJECT_BACKEND}",
-    "source": {
-        "type": "GITHUB",
-        "location": "${GITHUB_REPO}",
-        "buildspec": "buildspec-backend.yml"
-    },
-    "artifacts": { "type": "NO_ARTIFACTS" },
-    "environment": {
-        "type": "LINUX_CONTAINER",
-        "computeType": "BUILD_GENERAL1_SMALL",
-        "image": "aws/codebuild/amazonlinux2-x86_64-standard:5.0",
-        "privilegedMode": true,
-        "environmentVariables": [
-            { "name": "AWS_ACCOUNT_ID", "value": "${AWS_ACCOUNT_ID}" },
-            { "name": "AWS_DEFAULT_REGION", "value": "${AWS_REGION}" },
-            { "name": "ECR_REPO_NAME", "value": "${ECR_REPO_NAME}" }
-        ]
-    },
-    "serviceRole": "${CODEBUILD_ROLE_ARN}"
-}
-EOF
-    aws codebuild create-project --cli-input-json file:///tmp/codebuild-backend.json --region $AWS_REGION
-    rm -f /tmp/codebuild-backend.json
+    BACKEND_PROJECT_JSON=$(printf '{"name":"%s","source":{"type":"GITHUB","location":"%s","buildspec":"buildspec-backend.yml"},"artifacts":{"type":"NO_ARTIFACTS"},"environment":{"type":"LINUX_CONTAINER","computeType":"BUILD_GENERAL1_SMALL","image":"aws/codebuild/amazonlinux2-x86_64-standard:5.0","privilegedMode":true,"environmentVariables":[{"name":"AWS_ACCOUNT_ID","value":"%s"},{"name":"AWS_DEFAULT_REGION","value":"%s"},{"name":"ECR_REPO_NAME","value":"%s"}]},"serviceRole":"%s"}' "$CODEBUILD_PROJECT_BACKEND" "$GITHUB_REPO" "$AWS_ACCOUNT_ID" "$AWS_REGION" "$ECR_REPO_NAME" "$CODEBUILD_ROLE_ARN")
+    aws codebuild create-project --cli-input-json "$BACKEND_PROJECT_JSON" --region $AWS_REGION
     print_success "Proyecto CodeBuild backend creado"
 else
     print_warning "Proyecto CodeBuild backend ya existe"
@@ -498,58 +383,8 @@ aws logs create-log-group --log-group-name /ecs/${APP_NAME} --region $AWS_REGION
 # ============================================================================
 print_status "Registrando Task Definition..."
 
-cat > /tmp/task-definition.json <<EOF
-{
-    "family": "${APP_NAME}-task",
-    "networkMode": "awsvpc",
-    "requiresCompatibilities": ["FARGATE"],
-    "cpu": "256",
-    "memory": "512",
-    "executionRoleArn": "${TASK_EXEC_ROLE_ARN}",
-    "taskRoleArn": "${TASK_ROLE_ARN}",
-    "containerDefinitions": [
-        {
-            "name": "${SERVICE_NAME}",
-            "image": "${ECR_URI}:latest",
-            "portMappings": [
-                {
-                    "containerPort": 8080,
-                    "protocol": "tcp"
-                }
-            ],
-            "essential": true,
-            "environment": [
-                {"name": "AWS_REGION", "value": "${AWS_REGION}"},
-                {"name": "PORT", "value": "8080"}
-            ],
-            "secrets": [
-                {
-                    "name": "DATABASE_URL",
-                    "valueFrom": "${SECRET_ARN}"
-                }
-            ],
-            "logConfiguration": {
-                "logDriver": "awslogs",
-                "options": {
-                    "awslogs-group": "/ecs/${APP_NAME}",
-                    "awslogs-region": "${AWS_REGION}",
-                    "awslogs-stream-prefix": "ecs"
-                }
-            },
-            "healthCheck": {
-                "command": ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"],
-                "interval": 30,
-                "timeout": 5,
-                "retries": 3,
-                "startPeriod": 60
-            }
-        }
-    ]
-}
-EOF
-
-aws ecs register-task-definition --cli-input-json file:///tmp/task-definition.json --region $AWS_REGION
-rm -f /tmp/task-definition.json
+TASK_DEF_JSON=$(printf '{"family":"%s-task","networkMode":"awsvpc","requiresCompatibilities":["FARGATE"],"cpu":"256","memory":"512","executionRoleArn":"%s","taskRoleArn":"%s","containerDefinitions":[{"name":"%s","image":"%s:latest","portMappings":[{"containerPort":8080,"protocol":"tcp"}],"essential":true,"environment":[{"name":"AWS_REGION","value":"%s"},{"name":"PORT","value":"8080"}],"secrets":[{"name":"DATABASE_URL","valueFrom":"%s"}],"logConfiguration":{"logDriver":"awslogs","options":{"awslogs-group":"/ecs/%s","awslogs-region":"%s","awslogs-stream-prefix":"ecs"}},"healthCheck":{"command":["CMD-SHELL","curl -f http://localhost:8080/health || exit 1"],"interval":30,"timeout":5,"retries":3,"startPeriod":60}}]}' "$APP_NAME" "$TASK_EXEC_ROLE_ARN" "$TASK_ROLE_ARN" "$SERVICE_NAME" "$ECR_URI" "$AWS_REGION" "$SECRET_ARN" "$APP_NAME" "$AWS_REGION")
+aws ecs register-task-definition --cli-input-json "$TASK_DEF_JSON" --region $AWS_REGION
 
 print_success "Task Definition registrada"
 
@@ -617,32 +452,8 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
 
                 # Crear proyecto CodeBuild para frontend (si no existe)
                 if ! aws codebuild batch-get-projects --names $CODEBUILD_PROJECT_FRONTEND --query "projects[0].name" --output text --region $AWS_REGION 2>/dev/null | grep -q $CODEBUILD_PROJECT_FRONTEND; then
-                    cat > /tmp/codebuild-frontend.json <<EOFCB
-{
-    "name": "${CODEBUILD_PROJECT_FRONTEND}",
-    "source": {
-        "type": "GITHUB",
-        "location": "${GITHUB_REPO}",
-        "buildspec": "buildspec-frontend.yml"
-    },
-    "artifacts": { "type": "NO_ARTIFACTS" },
-    "environment": {
-        "type": "LINUX_CONTAINER",
-        "computeType": "BUILD_GENERAL1_SMALL",
-        "image": "aws/codebuild/amazonlinux2-x86_64-standard:5.0",
-        "privilegedMode": true,
-        "environmentVariables": [
-            { "name": "AWS_ACCOUNT_ID", "value": "${AWS_ACCOUNT_ID}" },
-            { "name": "AWS_DEFAULT_REGION", "value": "${AWS_REGION}" },
-            { "name": "ECR_FRONTEND_REPO_NAME", "value": "${ECR_FRONTEND_REPO_NAME}" },
-            { "name": "API_BASE_URL", "value": "${API_URL}/api/v1" }
-        ]
-    },
-    "serviceRole": "${CODEBUILD_ROLE_ARN}"
-}
-EOFCB
-                    aws codebuild create-project --cli-input-json file:///tmp/codebuild-frontend.json --region $AWS_REGION
-                    rm -f /tmp/codebuild-frontend.json
+                    FRONTEND_PROJECT_JSON=$(printf '{"name":"%s","source":{"type":"GITHUB","location":"%s","buildspec":"buildspec-frontend.yml"},"artifacts":{"type":"NO_ARTIFACTS"},"environment":{"type":"LINUX_CONTAINER","computeType":"BUILD_GENERAL1_SMALL","image":"aws/codebuild/amazonlinux2-x86_64-standard:5.0","privilegedMode":true,"environmentVariables":[{"name":"AWS_ACCOUNT_ID","value":"%s"},{"name":"AWS_DEFAULT_REGION","value":"%s"},{"name":"ECR_FRONTEND_REPO_NAME","value":"%s"},{"name":"API_BASE_URL","value":"%s"}]},"serviceRole":"%s"}' "$CODEBUILD_PROJECT_FRONTEND" "$GITHUB_REPO" "$AWS_ACCOUNT_ID" "$AWS_REGION" "$ECR_FRONTEND_REPO_NAME" "${API_URL}/api/v1" "$CODEBUILD_ROLE_ARN")
+                    aws codebuild create-project --cli-input-json "$FRONTEND_PROJECT_JSON" --region $AWS_REGION
                     print_success "Proyecto CodeBuild frontend creado"
                 else
                     # Actualizar API_BASE_URL en el proyecto existente
@@ -670,46 +481,8 @@ EOFCB
                 done
         
                 print_status "Registrando Task Definition del frontend..."
-                cat > /tmp/frontend-task-definition.json <<EOF
-{
-    "family": "${APP_NAME}-frontend-task",
-    "networkMode": "awsvpc",
-    "requiresCompatibilities": ["FARGATE"],
-    "cpu": "256",
-    "memory": "512",
-    "executionRoleArn": "${TASK_EXEC_ROLE_ARN}",
-    "taskRoleArn": "${TASK_ROLE_ARN}",
-    "containerDefinitions": [
-        {
-            "name": "${FRONTEND_SERVICE_NAME}",
-            "image": "${ECR_FRONTEND_URI}:latest",
-            "portMappings": [
-                {
-                    "containerPort": 3000,
-                    "protocol": "tcp"
-                }
-            ],
-            "essential": true,
-            "environment": [
-                {"name": "PORT", "value": "3000"},
-                {"name": "HOSTNAME", "value": "0.0.0.0"},
-                {"name": "API_BASE_URL", "value": "${API_URL}/api/v1"}
-            ],
-            "logConfiguration": {
-                "logDriver": "awslogs",
-                "options": {
-                    "awslogs-group": "/ecs/${APP_NAME}",
-                    "awslogs-region": "${AWS_REGION}",
-                    "awslogs-stream-prefix": "frontend"
-                }
-            }
-        }
-    ]
-}
-EOF
-
-                aws ecs register-task-definition --cli-input-json file:///tmp/frontend-task-definition.json --region $AWS_REGION
-                rm -f /tmp/frontend-task-definition.json
+                FRONTEND_TASK_DEF=$(printf '{"family":"%s-frontend-task","networkMode":"awsvpc","requiresCompatibilities":["FARGATE"],"cpu":"256","memory":"512","executionRoleArn":"%s","taskRoleArn":"%s","containerDefinitions":[{"name":"%s","image":"%s:latest","portMappings":[{"containerPort":3000,"protocol":"tcp"}],"essential":true,"environment":[{"name":"PORT","value":"3000"},{"name":"HOSTNAME","value":"0.0.0.0"},{"name":"API_BASE_URL","value":"%s"}],"logConfiguration":{"logDriver":"awslogs","options":{"awslogs-group":"/ecs/%s","awslogs-region":"%s","awslogs-stream-prefix":"frontend"}}}]}' "$APP_NAME" "$TASK_EXEC_ROLE_ARN" "$TASK_ROLE_ARN" "$FRONTEND_SERVICE_NAME" "$ECR_FRONTEND_URI" "${API_URL}/api/v1" "$APP_NAME" "$AWS_REGION")
+                aws ecs register-task-definition --cli-input-json "$FRONTEND_TASK_DEF" --region $AWS_REGION
                 print_success "Task Definition frontend registrada"
         
                 print_status "Desplegando servicio frontend en ECS Fargate..."
