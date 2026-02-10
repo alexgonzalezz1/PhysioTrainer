@@ -427,10 +427,10 @@ print_success "Task Definition registrada"
 # ============================================================================
 print_status "Desplegando servicio en ECS Fargate..."
 
-# Check if service exists
-SERVICE_STATUS=$(aws ecs describe-services --cluster $CLUSTER_NAME --services $SERVICE_NAME --query "services[0].status" --output text --region $AWS_REGION 2>/dev/null || echo "NONE")
+# Check if service exists (describe-services may return exit code 0 with empty services[])
+SERVICE_ARN=$(aws ecs describe-services --cluster $CLUSTER_NAME --services $SERVICE_NAME --query "services[0].serviceArn" --output text --region $AWS_REGION 2>/dev/null || true)
 
-if [ "$SERVICE_STATUS" == "NONE" ] || [ "$SERVICE_STATUS" == "INACTIVE" ]; then
+if [ -z "$SERVICE_ARN" ] || [ "$SERVICE_ARN" == "None" ]; then
     aws ecs create-service \
         --cluster $CLUSTER_NAME \
         --service-name $SERVICE_NAME \
