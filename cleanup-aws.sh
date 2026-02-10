@@ -16,6 +16,9 @@ CLUSTER_NAME="${APP_NAME}-cluster"
 DB_INSTANCE_NAME="${APP_NAME}-db"
 ECR_REPO_NAME="${APP_NAME}"
 ECR_FRONTEND_REPO_NAME="${APP_NAME}-frontend"
+CODEBUILD_PROJECT_BACKEND="${APP_NAME}-backend-build"
+CODEBUILD_PROJECT_FRONTEND="${APP_NAME}-frontend-build"
+CODEBUILD_ROLE_NAME="${APP_NAME}-codebuild-role"
 
 echo "=============================================="
 echo "   🗑️  LIMPIEZA DE RECURSOS AWS"
@@ -26,6 +29,7 @@ echo "- RDS Instance: '$DB_INSTANCE_NAME'"
 echo "- ECR Repository: '$ECR_REPO_NAME'"
 echo "- ECR Repository: '$ECR_FRONTEND_REPO_NAME'"
 echo "- Secrets Manager: secretos de la base de datos"
+echo "- CodeBuild: proyectos de build"
 echo "- VPC, Subnets, Security Groups, IAM Roles"
 echo ""
 read -p "¿Estás SEGURO de que quieres continuar? (y/n): " -n 1 -r
@@ -66,8 +70,16 @@ aws ecr delete-repository --repository-name $ECR_FRONTEND_REPO_NAME --force --re
 echo "Eliminando secretos..."
 aws secretsmanager delete-secret --secret-id ${APP_NAME}/database-url --force-delete-without-recovery --region $AWS_REGION 2>/dev/null || echo "Secreto no encontrado"
 
-# 6. Eliminar IAM Roles
+# 6. Eliminar CodeBuild Projects
+echo "Eliminando proyectos CodeBuild..."
+aws codebuild delete-project --name $CODEBUILD_PROJECT_BACKEND --region $AWS_REGION 2>/dev/null || echo "Proyecto CodeBuild backend no encontrado"
+aws codebuild delete-project --name $CODEBUILD_PROJECT_FRONTEND --region $AWS_REGION 2>/dev/null || echo "Proyecto CodeBuild frontend no encontrado"
+
+# 7. Eliminar IAM Roles...
 echo "Eliminando IAM Roles..."
+aws iam delete-role-policy --role-name $CODEBUILD_ROLE_NAME --policy-name CodeBuildPermissions 2>/dev/null || true
+aws iam delete-role --role-name $CODEBUILD_ROLE_NAME 2>/dev/null || echo "CodeBuild Role no encontrado"
+
 aws iam delete-role-policy --role-name ${APP_NAME}-ecs-task-execution-role --policy-name SecretsManagerAccess 2>/dev/null || true
 aws iam detach-role-policy --role-name ${APP_NAME}-ecs-task-execution-role --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy 2>/dev/null || true
 aws iam delete-role --role-name ${APP_NAME}-ecs-task-execution-role 2>/dev/null || echo "Task Execution Role no encontrado"

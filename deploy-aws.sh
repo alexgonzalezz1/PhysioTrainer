@@ -36,6 +36,10 @@ DB_USER="physiotrainer"
 DB_PASSWORD="${DB_PASSWORD:-$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32)}"
 ECR_REPO_NAME="${APP_NAME}"
 ECR_FRONTEND_REPO_NAME="${APP_NAME}-frontend"
+GITHUB_REPO="https://github.com/alexgonzalezz1/PhysioTrainer.git"
+CODEBUILD_PROJECT_BACKEND="${APP_NAME}-backend-build"
+CODEBUILD_PROJECT_FRONTEND="${APP_NAME}-frontend-build"
+CODEBUILD_ROLE_NAME="${APP_NAME}-codebuild-role"
 VPC_CIDR="10.0.0.0/16"
 
 # ============================================================================
@@ -98,9 +102,6 @@ fi
 
 ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
 ECR_FRONTEND_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_FRONTEND_REPO_NAME}"
-
-# Login a ECR
-aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
 # ============================================================================
 # PASO 2: Crear VPC y subnets (si no existen)
@@ -360,15 +361,130 @@ fi
 rm -f /tmp/trust-policy.json /tmp/secrets-policy.json /tmp/bedrock-policy.json
 
 # ============================================================================
-# PASO 8: Construir y subir imagen Docker
+# PASO 8: Crear CodeBuild y construir imágenes Docker en la nube
 # ============================================================================
-print_status "Construyendo imagen Docker..."
+print_status "Configurando AWS CodeBuild..."
 
-docker build -t ${ECR_REPO_NAME}:latest .
-docker tag ${ECR_REPO_NAME}:latest ${ECR_URI}:latest
-docker push ${ECR_URI}:latest
+# Crear IAM Role para CodeBuild
+CODEBUILD_ROLE_ARN=$(aws iam get-role --role-name $CODEBUILD_ROLE_NAME --query "Role.Arn" --output text 2>/dev/null || true)
 
-print_success "Imagen subida a ECR: ${ECR_URI}:latest"
+if [ -z "$CODEBUILD_ROLE_ARN" ]; then
+    cat > /tmp/codebuild-trust-policy.json <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": { "Service": "codebuild.amazonaws.com" },
+            "Action": "sts:AssumeRole"
+        }
+    ]
+}
+EOF
+
+    aws iam create-role \
+        --role-name $CODEBUILD_ROLE_NAME \
+        --assume-role-policy-document file:///tmp/codebuild-trust-policy.json
+
+    # Permisos: ECR push, CloudWatch Logs, S3 (cache)
+    cat > /tmp/codebuild-policy.json <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ecr:GetAuthorizationToken",
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchGetImage",
+                "ecr:PutImage",
+                "ecr:InitiateLayerUpload",
+                "ecr:UploadLayerPart",
+                "ecr:CompleteLayerUpload"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+EOF
+
+    aws iam put-role-policy \
+        --role-name $CODEBUILD_ROLE_NAME \
+        --policy-name CodeBuildPermissions \
+        --policy-document file:///tmp/codebuild-policy.json
+
+    CODEBUILD_ROLE_ARN=$(aws iam get-role --role-name $CODEBUILD_ROLE_NAME --query "Role.Arn" --output text)
+    rm -f /tmp/codebuild-trust-policy.json /tmp/codebuild-policy.json
+
+    print_success "IAM Role de CodeBuild creado"
+    # Esperar propagación IAM
+    sleep 10
+else
+    print_warning "IAM Role de CodeBuild ya existe"
+fi
+
+# --- Proyecto CodeBuild para BACKEND ---
+if ! aws codebuild batch-get-projects --names $CODEBUILD_PROJECT_BACKEND --query "projects[0].name" --output text --region $AWS_REGION 2>/dev/null | grep -q $CODEBUILD_PROJECT_BACKEND; then
+    print_status "Creando proyecto CodeBuild para backend..."
+    cat > /tmp/codebuild-backend.json <<EOF
+{
+    "name": "${CODEBUILD_PROJECT_BACKEND}",
+    "source": {
+        "type": "GITHUB",
+        "location": "${GITHUB_REPO}",
+        "buildspec": "buildspec-backend.yml"
+    },
+    "artifacts": { "type": "NO_ARTIFACTS" },
+    "environment": {
+        "type": "LINUX_CONTAINER",
+        "computeType": "BUILD_GENERAL1_SMALL",
+        "image": "aws/codebuild/amazonlinux2-x86_64-standard:5.0",
+        "privilegedMode": true,
+        "environmentVariables": [
+            { "name": "AWS_ACCOUNT_ID", "value": "${AWS_ACCOUNT_ID}" },
+            { "name": "AWS_DEFAULT_REGION", "value": "${AWS_REGION}" },
+            { "name": "ECR_REPO_NAME", "value": "${ECR_REPO_NAME}" }
+        ]
+    },
+    "serviceRole": "${CODEBUILD_ROLE_ARN}"
+}
+EOF
+    aws codebuild create-project --cli-input-json file:///tmp/codebuild-backend.json --region $AWS_REGION
+    rm -f /tmp/codebuild-backend.json
+    print_success "Proyecto CodeBuild backend creado"
+else
+    print_warning "Proyecto CodeBuild backend ya existe"
+fi
+
+# Lanzar build del backend
+print_status "Construyendo imagen Docker del backend en CodeBuild (puede tardar 3-5 min)..."
+BACKEND_BUILD_ID=$(aws codebuild start-build --project-name $CODEBUILD_PROJECT_BACKEND --region $AWS_REGION --query "build.id" --output text)
+print_status "Build ID: $BACKEND_BUILD_ID"
+
+# Esperar a que termine
+while true; do
+    BUILD_STATUS=$(aws codebuild batch-get-builds --ids $BACKEND_BUILD_ID --query "builds[0].buildStatus" --output text --region $AWS_REGION)
+    if [ "$BUILD_STATUS" == "SUCCEEDED" ]; then
+        print_success "Imagen backend construida y subida a ECR"
+        break
+    elif [ "$BUILD_STATUS" == "FAILED" ] || [ "$BUILD_STATUS" == "FAULT" ] || [ "$BUILD_STATUS" == "STOPPED" ] || [ "$BUILD_STATUS" == "TIMED_OUT" ]; then
+        print_error "Build del backend falló: $BUILD_STATUS"
+        print_error "Revisa los logs en: aws codebuild batch-get-builds --ids $BACKEND_BUILD_ID"
+        exit 1
+    fi
+    echo -n "."
+    sleep 15
+done
 
 # ============================================================================
 # PASO 9: Crear CloudWatch Log Group
@@ -497,14 +613,61 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
         if [ -z "$API_URL" ]; then
                 print_error "No se pudo determinar la URL pública de la API. Reintenta cuando la tarea tenga IP pública."
         else
-                print_status "Construyendo y subiendo imagen del frontend a ECR..."
-        
-                docker build -t ${ECR_FRONTEND_REPO_NAME}:latest \
-                        --build-arg API_BASE_URL="${API_URL}/api/v1" \
-                        ./frontend-react
-                docker tag ${ECR_FRONTEND_REPO_NAME}:latest ${ECR_FRONTEND_URI}:latest
-                docker push ${ECR_FRONTEND_URI}:latest
-                print_success "Imagen frontend subida a ECR: ${ECR_FRONTEND_URI}:latest"
+                print_status "Construyendo imagen del frontend en CodeBuild (puede tardar 3-5 min)..."
+
+                # Crear proyecto CodeBuild para frontend (si no existe)
+                if ! aws codebuild batch-get-projects --names $CODEBUILD_PROJECT_FRONTEND --query "projects[0].name" --output text --region $AWS_REGION 2>/dev/null | grep -q $CODEBUILD_PROJECT_FRONTEND; then
+                    cat > /tmp/codebuild-frontend.json <<EOFCB
+{
+    "name": "${CODEBUILD_PROJECT_FRONTEND}",
+    "source": {
+        "type": "GITHUB",
+        "location": "${GITHUB_REPO}",
+        "buildspec": "buildspec-frontend.yml"
+    },
+    "artifacts": { "type": "NO_ARTIFACTS" },
+    "environment": {
+        "type": "LINUX_CONTAINER",
+        "computeType": "BUILD_GENERAL1_SMALL",
+        "image": "aws/codebuild/amazonlinux2-x86_64-standard:5.0",
+        "privilegedMode": true,
+        "environmentVariables": [
+            { "name": "AWS_ACCOUNT_ID", "value": "${AWS_ACCOUNT_ID}" },
+            { "name": "AWS_DEFAULT_REGION", "value": "${AWS_REGION}" },
+            { "name": "ECR_FRONTEND_REPO_NAME", "value": "${ECR_FRONTEND_REPO_NAME}" },
+            { "name": "API_BASE_URL", "value": "${API_URL}/api/v1" }
+        ]
+    },
+    "serviceRole": "${CODEBUILD_ROLE_ARN}"
+}
+EOFCB
+                    aws codebuild create-project --cli-input-json file:///tmp/codebuild-frontend.json --region $AWS_REGION
+                    rm -f /tmp/codebuild-frontend.json
+                    print_success "Proyecto CodeBuild frontend creado"
+                else
+                    # Actualizar API_BASE_URL en el proyecto existente
+                    aws codebuild update-project --name $CODEBUILD_PROJECT_FRONTEND \
+                        --environment "type=LINUX_CONTAINER,computeType=BUILD_GENERAL1_SMALL,image=aws/codebuild/amazonlinux2-x86_64-standard:5.0,privilegedMode=true,environmentVariables=[{name=AWS_ACCOUNT_ID,value=${AWS_ACCOUNT_ID}},{name=AWS_DEFAULT_REGION,value=${AWS_REGION}},{name=ECR_FRONTEND_REPO_NAME,value=${ECR_FRONTEND_REPO_NAME}},{name=API_BASE_URL,value=${API_URL}/api/v1}]" \
+                        --region $AWS_REGION >/dev/null
+                    print_warning "Proyecto CodeBuild frontend actualizado con nueva API_BASE_URL"
+                fi
+
+                FRONTEND_BUILD_ID=$(aws codebuild start-build --project-name $CODEBUILD_PROJECT_FRONTEND --region $AWS_REGION --query "build.id" --output text)
+                print_status "Build ID: $FRONTEND_BUILD_ID"
+
+                while true; do
+                    FBUILD_STATUS=$(aws codebuild batch-get-builds --ids $FRONTEND_BUILD_ID --query "builds[0].buildStatus" --output text --region $AWS_REGION)
+                    if [ "$FBUILD_STATUS" == "SUCCEEDED" ]; then
+                        print_success "Imagen frontend construida y subida a ECR"
+                        break
+                    elif [ "$FBUILD_STATUS" == "FAILED" ] || [ "$FBUILD_STATUS" == "FAULT" ] || [ "$FBUILD_STATUS" == "STOPPED" ] || [ "$FBUILD_STATUS" == "TIMED_OUT" ]; then
+                        print_error "Build del frontend falló: $FBUILD_STATUS"
+                        print_error "Revisa logs: aws codebuild batch-get-builds --ids $FRONTEND_BUILD_ID"
+                        exit 1
+                    fi
+                    echo -n "."
+                    sleep 15
+                done
         
                 print_status "Registrando Task Definition del frontend..."
                 cat > /tmp/frontend-task-definition.json <<EOF
@@ -613,8 +776,11 @@ echo "   API:      $API_URL"
 echo "   Docs:     $API_URL/docs"
 echo "   Health:   $API_URL/health"
 else
-echo "   (Esperando asignación de IP pública...)"
+echo "   API:  (Esperando asignación de IP pública...)"
 echo "   Ejecuta después: aws ecs list-tasks --cluster $CLUSTER_NAME"
+fi
+if [ -n "$FRONTEND_URL" ]; then
+echo "   Frontend: $FRONTEND_URL"
 fi
 echo ""
 echo "🗄️ Base de datos:"
