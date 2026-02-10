@@ -274,22 +274,22 @@ if [ -z "$TASK_EXEC_ROLE_ARN" ]; then
     aws iam create-role \
         --role-name $TASK_EXEC_ROLE_NAME \
         --assume-role-policy-document "$ECS_TRUST_POLICY"
-    
-    aws iam attach-role-policy \
-        --role-name $TASK_EXEC_ROLE_NAME \
-        --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-    
-    SECRETS_POLICY=$(printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["secretsmanager:GetSecretValue"],"Resource":"%s"}]}' "$SECRET_ARN")
-    aws iam put-role-policy \
-        --role-name $TASK_EXEC_ROLE_NAME \
-        --policy-name SecretsManagerAccess \
-        --policy-document "$SECRETS_POLICY"
-    
     TASK_EXEC_ROLE_ARN=$(aws iam get-role --role-name $TASK_EXEC_ROLE_NAME --query "Role.Arn" --output text)
     print_success "IAM Task Execution Role creado"
 else
     print_warning "IAM Task Execution Role ya existe"
 fi
+
+# Siempre asegurar que las policies estén adjuntas (idempotente)
+aws iam attach-role-policy \
+    --role-name $TASK_EXEC_ROLE_NAME \
+    --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy 2>/dev/null || true
+
+SECRETS_POLICY=$(printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["secretsmanager:GetSecretValue"],"Resource":"%s"}]}' "$SECRET_ARN")
+aws iam put-role-policy \
+    --role-name $TASK_EXEC_ROLE_NAME \
+    --policy-name SecretsManagerAccess \
+    --policy-document "$SECRETS_POLICY"
 
 # Task Role (for Bedrock access)
 TASK_ROLE_NAME="${APP_NAME}-ecs-task-role"
@@ -299,18 +299,18 @@ if [ -z "$TASK_ROLE_ARN" ]; then
     aws iam create-role \
         --role-name $TASK_ROLE_NAME \
         --assume-role-policy-document "$ECS_TRUST_POLICY"
-    
-    BEDROCK_POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":"arn:aws:bedrock:*::foundation-model/anthropic.*"}]}'
-    aws iam put-role-policy \
-        --role-name $TASK_ROLE_NAME \
-        --policy-name BedrockAccess \
-        --policy-document "$BEDROCK_POLICY"
-    
     TASK_ROLE_ARN=$(aws iam get-role --role-name $TASK_ROLE_NAME --query "Role.Arn" --output text)
     print_success "IAM Task Role creado"
 else
     print_warning "IAM Task Role ya existe"
 fi
+
+# Siempre asegurar que la policy de Bedrock esté adjunta (idempotente)
+BEDROCK_POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":"arn:aws:bedrock:*::foundation-model/anthropic.*"}]}'
+aws iam put-role-policy \
+    --role-name $TASK_ROLE_NAME \
+    --policy-name BedrockAccess \
+    --policy-document "$BEDROCK_POLICY"
 
 # ============================================================================
 # PASO 8: Crear CodeBuild y construir imágenes Docker en la nube
