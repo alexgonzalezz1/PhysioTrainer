@@ -1,0 +1,12 @@
+{
+  "name": "Cuaderno de Fallos",
+  "short_name": "Fallos",
+  "description": "Apunta las preguntas que fallas, repásalas y genera resúmenes de tus errores.",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f6fb",
+  "theme_color": "#4f46e5",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

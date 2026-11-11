@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Cuaderno de Fallos</title>
+  <meta name="description" content="Apunta las preguntas que fallas, repásalas con repetición espaciada y genera resúmenes de tus errores.">
+  <meta name="theme-color" content="#4f46e5">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <nav>
+    <a class="brand" href="#/inicio"><img src="icon.svg" alt="" width="28" height="28"><span>Cuaderno de Fallos</span></a>
+    <a data-nav="inicio" href="#/inicio"><i>🏠</i><span>Inicio</span></a>
+    <a data-nav="anadir" href="#/anadir"><i>➕</i><span>Añadir</span></a>
+    <a data-nav="repasar" href="#/repasar"><i>🎯</i><span>Repasar</span><b id="dueBadge" hidden></b></a>
+    <a data-nav="preguntas" href="#/preguntas"><i>🗂️</i><span>Preguntas</span></a>
+    <a data-nav="resumenes" href="#/resumenes"><i>🧠</i><span>Resúmenes</span></a>
+    <a data-nav="ajustes" href="#/ajustes"><i>⚙️</i><span>Ajustes</span></a>
+  </nav>
+  <main id="view"></main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <noscript>Esta aplicación necesita JavaScript.</noscript>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
